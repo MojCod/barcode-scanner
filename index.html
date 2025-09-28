@@ -1,115 +1,174 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Advanced Barcode Scanner</title>
-    <meta name="theme-color" content="#28a745">
-    <link rel="stylesheet" href="style.css">
-    <link rel="manifest" href="manifest.json">
-    <script src="https://cdn.jsdelivr.net/npm/quagga@0.12.1/dist/quagga.min.js"></script>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Barcode Scanner PWA</title>
+  <style>
+    body {
+      margin: 0;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      background: black;
+      color: white;
+      font-family: sans-serif;
+      text-align: center;
+    }
+    #video {
+      width: 100%;
+      height: auto;
+      max-height: 120px; /* barcode strip */
+      object-fit: cover;
+      background: #222;
+    }
+    #result {
+      margin-top: 20px;
+      font-size: 1.2em;
+    }
+    .btn-row {
+      margin-top: 20px;
+      display: flex;
+      gap: 10px;
+      justify-content: center;
+    }
+    button {
+      padding: 10px 20px;
+      font-size: 1em;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      color: white;
+    }
+    #toggleBtn {
+      background: #28a745;
+    }
+    #toggleBtn.off {
+      background: #dc3545;
+    }
+    #flashBtn {
+      background: #007bff;
+    }
+    #flashBtn.on {
+      background: #ffc107;
+      color: black;
+    }
+  </style>
 </head>
 <body>
-    <div class="container">
-        <h1>📷 Barcode Scanner</h1>
-        
-        <div class="scanner-section">
-            <div id="reader" class="scanner-viewport">
-                <div class="scanning-overlay" id="overlay">
-                    <div class="scan-line"></div>
-                </div>
-                <video id="video" playsinline autoplay></video>
-                <canvas id="canvas" class="drawingBuffer"></canvas>
-            </div>
-            
-            <div class="manual-buttons">
-                <button class="btn manual-btn" onclick="openManualBarcode()">
-                    📝 Enter Barcode
-                </button>
-                <button class="btn manual-btn" onclick="openManualShortcode()">
-                    🔢 Enter Shortcode
-                </button>
-            </div>
-        </div>
-        
-        <div id="result" class="result-box">Click "Start Scan" to begin</div>
-        
-        <div class="control-buttons">
-            <button class="btn start-btn" onclick="startAdvancedScanner()">Start Scan</button>
-            <button class="btn stop-btn" onclick="stopScanner()">Stop Scan</button>
-            <button class="btn flash-btn" onclick="toggleFlashlight()">🔦 Flash Off</button>
-        </div>
-        
-        <div class="flash-status" id="flashStatus"></div>
-        
-        <div class="products-section">
-            <h2>📦 Products</h2>
-            <div id="productList" class="products-list"></div>
-        </div>
+  <div>
+    <video id="video" autoplay playsinline></video>
+    <div id="result">Scan a barcode...</div>
+    <div class="btn-row">
+      <button id="toggleBtn">Start Camera</button>
+      <button id="flashBtn">Flash Off</button>
     </div>
+  </div>
 
-    <!-- Modals -->
-    <div id="modals">
-        <div id="productModal" class="modal">
-            <div class="modal-content">
-                <h3>Product Details</h3>
-                <form onsubmit="saveProduct(); return false;">
-                    <div class="form-group">
-                        <input type="text" id="productName" placeholder="Product name" required>
-                    </div>
-                    <div class="form-group">
-                        <input type="text" id="productShortcode" placeholder="Short code (optional)" 
-                               maxlength="7" oninput="validateNumberInput(this)">
-                        <small>Max 7 digits</small>
-                    </div>
-                    <div class="form-group">
-                        <input type="number" id="productPrice" placeholder="Price" step="0.01" min="0" required>
-                    </div>
-                    <div class="form-group">
-                        <input type="number" id="productQuantity" placeholder="Quantity" min="1" value="1" required>
-                    </div>
-                    <div class="modal-actions">
-                        <button type="submit" class="btn start-btn">Save</button>
-                        <button type="button" class="btn stop-btn" onclick="closeModal()">Cancel</button>
-                    </div>
-                </form>
-            </div>
-        </div>
+  <!-- ZXing fallback -->
+  <script src="https://unpkg.com/@zxing/library@latest"></script>
+  <script>
+    const video = document.getElementById('video');
+    const result = document.getElementById('result');
+    const toggleBtn = document.getElementById('toggleBtn');
+    const flashBtn = document.getElementById('flashBtn');
 
-        <div id="manualBarcodeModal" class="modal">
-            <div class="modal-content">
-                <h3>Enter Barcode</h3>
-                <div class="form-group">
-                    <input type="text" id="manualBarcodeInput" placeholder="Enter barcode" 
-                           oninput="validateNumberInput(this)">
-                    <small>Numbers only</small>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn start-btn" onclick="submitManualBarcode()">Confirm</button>
-                    <button class="btn stop-btn" onclick="closeManualBarcodeModal()">Cancel</button>
-                </div>
-            </div>
-        </div>
+    let stream = null;
+    let scannerRunning = false;
+    let stopZXing = null;
+    let track = null;
+    let flashOn = false;
 
-        <div id="manualShortcodeModal" class="modal">
-            <div class="modal-content">
-                <h3>Enter Shortcode</h3>
-                <div class="form-group">
-                    <input type="text" id="manualShortcodeInput" placeholder="Shortcode (7 digits)" 
-                           maxlength="7" oninput="validateNumberInput(this)">
-                    <small>Exactly 7 digits</small>
-                </div>
-                <div class="form-group">
-                    <input type="text" id="manualProductName" placeholder="Product name" required>
-                </div>
-                <div class="modal-actions">
-                    <button class="btn start-btn" onclick="submitManualShortcode()">Save</button>
-                    <button class="btn stop-btn" onclick="closeManualShortcodeModal()">Cancel</button>
-                </div>
-            </div>
-        </div>
-    </div>
+    async function startCamera() {
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: "environment" }
+        });
+        video.srcObject = stream;
+        track = stream.getVideoTracks()[0];
+      } catch (err) {
+        console.error("Camera error:", err);
+        result.textContent = "Camera access failed.";
+      }
+    }
 
-    <script src="script.js"></script>
+    async function startScanner() {
+      if ('BarcodeDetector' in window) {
+        const detector = new BarcodeDetector({ formats: ['code_128', 'ean_13', 'upc_a'] });
+        const scan = async () => {
+          if (!scannerRunning) return;
+          try {
+            const barcodes = await detector.detect(video);
+            if (barcodes.length > 0) {
+              result.textContent = "Barcode: " + barcodes[0].rawValue;
+            }
+          } catch (err) {
+            console.warn(err);
+          }
+          requestAnimationFrame(scan);
+        };
+        scan();
+      } else {
+        // Fallback with ZXing
+        const codeReader = new ZXing.BrowserMultiFormatReader();
+        stopZXing = codeReader.decodeFromVideoDevice(null, 'video', (res, err) => {
+          if (res) {
+            result.textContent = "Barcode: " + res.text;
+          }
+        });
+      }
+    }
+
+    function stopCamera() {
+      if (stream) {
+        stream.getTracks().forEach(track => track.stop());
+        stream = null;
+        video.srcObject = null;
+      }
+      if (stopZXing) {
+        stopZXing();
+        stopZXing = null;
+      }
+      track = null;
+    }
+
+    async function toggleFlash() {
+      if (!track) return;
+      const capabilities = track.getCapabilities();
+      if (!capabilities.torch) {
+        alert("Flash not supported on this device/browser.");
+        return;
+      }
+      flashOn = !flashOn;
+      try {
+        await track.applyConstraints({
+          advanced: [{ torch: flashOn }]
+        });
+        flashBtn.textContent = flashOn ? "Flash On" : "Flash Off";
+        flashBtn.classList.toggle("on", flashOn);
+      } catch (err) {
+        console.error("Flash error:", err);
+      }
+    }
+
+    toggleBtn.addEventListener('click', async () => {
+      if (scannerRunning) {
+        scannerRunning = false;
+        stopCamera();
+        toggleBtn.textContent = "Start Camera";
+        toggleBtn.classList.remove("off");
+      } else {
+        scannerRunning = true;
+        await startCamera();
+        startScanner();
+        toggleBtn.textContent = "Stop Camera";
+        toggleBtn.classList.add("off");
+      }
+    });
+
+    flashBtn.addEventListener('click', toggleFlash);
+  </script>
 </body>
 </html>
