@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Barcode Scanner PWA with DB</title>
+<title>Barcode Scanner PWA with DB (Filtered)</title>
 <style>
   body { margin:0; display:flex; flex-direction:column; justify-content:center; align-items:center; height:100vh; background:black; color:white; font-family:sans-serif; text-align:center; }
   #video { width:100%; max-height:120px; object-fit:cover; background:#222; }
@@ -36,7 +36,7 @@ const listDiv=document.getElementById('list');
 
 let stream=null, scannerRunning=false, stopZXing=null, track=null, flashOn=false;
 
-// --------- IndexedDB setup ----------
+// -------- IndexedDB setup ----------
 let db;
 const request=indexedDB.open("BarcodeDB",1);
 request.onerror=e=>console.error("DB error",e);
@@ -52,7 +52,7 @@ request.onupgradeneeded=e=>{
   }
 };
 
-// --------- DB helper functions ----------
+// -------- DB helpers ----------
 function saveBarcode(code){
   const tx=db.transaction("barcodes","readwrite");
   const store=tx.objectStore("barcodes");
@@ -72,20 +72,40 @@ function displayAll(){
   const tx=db.transaction("barcodes","readonly");
   const store=tx.objectStore("barcodes");
   const req=store.getAll();
-  req.onsuccess=()=>{
-    listDiv.innerHTML=req.result.map(r=>r.code).join("<br>");
-  };
+  req.onsuccess=()=>{ listDiv.innerHTML=req.result.map(r=>r.code).join("<br>"); };
 }
 
-function showMessage(msg,cls){
-  result.textContent=msg;
-  result.className=cls;
+function showMessage(msg,cls){ result.textContent=msg; result.className=cls; }
+
+// -------- Barcode Validation ----------
+function isValidBarcode(code){
+  return /^[0-9]{8,13}$/.test(code); // فقط عدد، طول 8 تا 13
 }
 
-// --------- Camera and Scanner ----------
+// Multi-frame check
+let lastDetected=null;
+let detectCount=0;
+const FRAME_THRESHOLD=2; // تعداد فریم‌های تایید قبل از ثبت
+
+function checkAndSave(code){
+  if(!isValidBarcode(code)) return;
+  if(code === lastDetected){
+    detectCount++;
+  } else {
+    lastDetected=code;
+    detectCount=1;
+  }
+  if(detectCount >= FRAME_THRESHOLD){
+    saveBarcode(code);
+    detectCount=0;
+    lastDetected=null;
+  }
+}
+
+// -------- Camera & Scanner ----------
 async function startCamera(){
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment"}});
+    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment", width:1280, height:720}});
     video.srcObject=stream;
     track=stream.getVideoTracks()[0];
   }catch(err){
@@ -102,7 +122,7 @@ async function startScanner(){
       try{
         const barcodes=await detector.detect(video);
         if(barcodes.length>0){
-          saveBarcode(barcodes[0].rawValue);
+          checkAndSave(barcodes[0].rawValue);
           navigator.vibrate?.(80);
         }
       }catch(e){}
@@ -113,7 +133,7 @@ async function startScanner(){
     const codeReader=new ZXing.BrowserMultiFormatReader();
     stopZXing=codeReader.decodeFromVideoDevice(null,'video',(res,err)=>{
       if(res){
-        saveBarcode(res.text);
+        checkAndSave(res.text);
         navigator.vibrate?.(80);
       }
     });
@@ -131,7 +151,7 @@ function stopCamera(){
   track=null;
 }
 
-// --------- Flash ----------
+// -------- Flash ----------
 async function toggleFlash(){
   if(!track) return;
   const cap=track.getCapabilities();
@@ -144,7 +164,7 @@ async function toggleFlash(){
   }catch(err){console.error(err);}
 }
 
-// --------- Button Events ----------
+// -------- Button Events ----------
 toggleBtn.addEventListener('click',async()=>{
   if(scannerRunning){
     scannerRunning=false;
