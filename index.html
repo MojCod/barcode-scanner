@@ -37,8 +37,7 @@ const listDiv=document.getElementById('list');
 let stream=null, scannerRunning=false, stopZXing=null, track=null, flashOn=false;
 
 // -------- IndexedDB setup ----------
-let localDB;
-let bigDB = new Set(); // BigDB now loaded from JSON
+let localDB, bigDB;
 
 // Local DB = scanned barcodes
 const localRequest=indexedDB.open("LocalScannedDB",1);
@@ -51,14 +50,24 @@ localRequest.onupgradeneeded=e=>{
   }
 };
 
-// -------- Load BigDB from external JSON --------
-fetch("bigdb.json")
-  .then(res => res.json())
-  .then(data => {
-    bigDB = new Set(data.barcodes || []);
-    console.log(`✅ BigDB loaded with ${bigDB.size} barcodes`);
-  })
-  .catch(err => console.error("Failed to load BigDB", err));
+// Big DB = reference barcodes (fixed, read-only)
+const bigRequest=indexedDB.open("BigBarcodeDB",1);
+bigRequest.onerror=e=>console.error("BigDB error",e);
+bigRequest.onsuccess=e=>{ bigDB=e.target.result; preloadBigDB(); console.log("BigDB ready"); };
+bigRequest.onupgradeneeded=e=>{
+  bigDB=e.target.result;
+  if(!bigDB.objectStoreNames.contains("barcodes")){
+    bigDB.createObjectStore("barcodes",{keyPath:"code"});
+  }
+};
+
+// Preload BigDB (replaceable with real fixed data)
+function preloadBigDB(){
+  const codes=["12345678","98765432","11112222","22223333","33334444"];
+  const tx=bigDB.transaction("barcodes","readwrite");
+  const store=tx.objectStore("barcodes");
+  codes.forEach(c=>store.put({code:c}));
+}
 
 // -------- DB helpers ----------
 function saveLocalBarcode(code){
@@ -89,37 +98,54 @@ function checkAndSave(code){
   if(code===lastDetected){ detectCount++; } else { lastDetected=code; detectCount=1; }
   if(detectCount>=FRAME_THRESHOLD){
     detectCount=0; lastDetected=null;
-
-    if(bigDB.has(code)){
-      showMessage(`Barcode exists in reference DB: ${code}`,"warning");
-    } else {
-      saveLocalBarcode(code);
-      showMessage(`New barcode saved: ${code}`,"success");
-    }
+    // check in BigDB
+    const tx=bigDB.transaction("barcodes","readonly");
+    const store=tx.objectStore("barcodes");
+    const req=store.get(code);
+    req.onsuccess=()=>{
+      if(req.result){
+        showMessage(`Barcode exists in reference DB: ${code}`,"warning");
+      } else {
+        saveLocalBarcode(code);
+        showMessage(`New barcode saved: ${code}`,"success");
+      }
+    };
   }
 }
 
 // -------- Camera & Scanner ----------
 async function startCamera(){
   try{
-    stream=await navigator.mediaDevices.getUserMedia({video:{facingMode:"environment", width:1280, height:720}});
-    video.srcObject=stream; track=stream.getVideoTracks()[0];
-  }catch(err){ console.error(err); showMessage("Camera access failed.","warning"); }
+    stream=await navigator.mediaDevices.getUserMedia({
+      video:{
+        facingMode:"environment",
+        width:{ideal:1280},
+        height:{ideal:720}
+      }
+    });
+    video.srcObject=stream;
+    track=stream.getVideoTracks()[0];
+  }catch(err){
+    console.error(err);
+    showMessage("Camera access failed.","warning");
+  }
 }
 
 async function startScanner(){
   if('BarcodeDetector' in window){
-    const detector=new BarcodeDetector({formats:['code_128','ean_13','upc_a']});
+    console.log("Using BarcodeDetector API");
+    const detector=new BarcodeDetector({formats:['code_128','ean_13','upc_a','ean_8']});
     const scan=async()=>{
       if(!scannerRunning) return;
       try{
         const barcodes=await detector.detect(video);
         if(barcodes.length>0){ checkAndSave(barcodes[0].rawValue); navigator.vibrate?.(80); }
-      }catch(e){}
+      }catch(e){ console.warn("Detector error",e); }
       requestAnimationFrame(scan);
     };
     scan();
   } else {
+    console.log("Using ZXing fallback");
     const codeReader=new ZXing.BrowserMultiFormatReader();
     stopZXing=codeReader.decodeFromVideoDevice(null,'video',(res,err)=>{
       if(res){ checkAndSave(res.text); navigator.vibrate?.(80); }
